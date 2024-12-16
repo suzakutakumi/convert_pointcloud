@@ -24,7 +24,6 @@ find_package(ament_cmake REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(sensor_msgs REQUIRED)
 find_package(pcl_conversions REQUIRED)
-find_package(PCL REQUIRED COMPONENTS common io)
 find_package(PCL 1.13 REQUIRED)
 
 include_directories(
@@ -34,22 +33,22 @@ include_directories(${PCL_INCLUDE_DIRS})
 link_directories(${PCL_LIBRARY_DIRS})
 add_definitions(${PCL_DEFINITIONS})
 
-add_executable(to_2dlidar src/to_2dlidar.cpp)
+add_executable(preprocess src/preprocess.cpp)
 
-ament_target_dependencies(to_2dlidar
+ament_target_dependencies(preprocess
   rclcpp
   sensor_msgs
   pcl_conversions
   PCL
 )
 
-target_link_libraries(to_2dlidar ${PCL_LIBRARIES})
+target_link_libraries(preprocess ${PCL_LIBRARIES})
 
-target_include_directories(to_2dlidar PUBLIC
+target_include_directories(preprocess PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
   $<INSTALL_INTERFACE:include>)
 
-install(TARGETS to_2dlidar
+install(TARGETS preprocess
   DESTINATION lib/${PROJECT_NAME})
 
 if(BUILD_TESTING)

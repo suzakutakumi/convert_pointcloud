@@ -10,48 +10,39 @@
 
 #include <chrono>
 #include <iostream>
-#include <sstream>
-
-std::string getTimestamp()
-{
-  // 現在のUnixタイム（エポック秒）を取得
-  const auto &now = std::chrono::system_clock::now();
-  const auto &currentTime = std::chrono::system_clock::to_time_t(now);
-
-  // Unixタイムを文字列に変換
-  std::stringstream ss;
-  ss << currentTime;
-
-  return ss.str();
-}
 
 using std::placeholders::_1;
 
-class To2DLiDARNode : public rclcpp::Node
+class PreprocessNode : public rclcpp::Node
 {
 public:
-  To2DLiDARNode()
-      : Node("pubsub_pointcloud_node")
+  PreprocessNode()
+      : Node("preprocess_node")
   {
     this->declare_parameter("split_thresholds", std::vector<double>{0});
     this->declare_parameter("robot_tilt", std::vector<double>{0, 0, 0});
 
     split_thresholds = get_parameter("split_thresholds").as_double_array();
+    split_thresholds.insert(split_thresholds.begin(), ThresholdLowest);
+    split_thresholds.push_back(ThresholdMax);
 
     subscription_ = this->create_subscription<sensor_msgs::msg::PointCloud2>(
-        "pointcloud", 10, std::bind(&To2DLiDARNode::subscriber_callback, this, _1));
+        "pointcloud", 10, std::bind(&PreprocessNode::subscriber_callback, this, _1));
 
-    std::string publisher_basename = "lidar/data";
-    publishers.push_back(create_publisher<sensor_msgs::msg::PointCloud2>(publisher_basename + std::to_string(0), 10));
-    for (size_t i = 0; i < split_thresholds.size(); i++)
+    std::string publisher_basename = "converted_pointcloud/splited_data";
+    for (size_t i = 0; i < split_thresholds.size() - 1; i++)
     {
-      publishers.push_back(create_publisher<sensor_msgs::msg::PointCloud2>(publisher_basename + std::to_string(i + 1), 10));
+      publishers.push_back(create_publisher<sensor_msgs::msg::PointCloud2>(publisher_basename + std::to_string(i), 10));
     }
+
+    converted_pointcloud_publisher = create_publisher<sensor_msgs::msg::PointCloud2>("converted_pointcloud", 10);
   }
 
 private:
+  using PC_Type = pcl::PointCloud<pcl::PointXYZRGB>;
   rclcpp::Subscription<sensor_msgs::msg::PointCloud2>::SharedPtr subscription_;
   std::vector<rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr> publishers;
+  rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr converted_pointcloud_publisher;
 
   std::vector<double> split_thresholds;
 
@@ -64,51 +55,49 @@ private:
 
     // PCLに変換
     RCLCPP_INFO(this->get_logger(), "change to pcl");
-    pcl::PointCloud<pcl::PointXYZRGB> original_cloud;
+    PC_Type original_cloud;
     pcl::fromROSMsg(*msg, original_cloud);
 
     // 傾きの補正
-    RCLCPP_DEBUG(this->get_logger(), "correct the tilt");
+    RCLCPP_INFO(this->get_logger(), "correct the tilt");
     auto robot_tilt = get_parameter("robot_tilt").as_double_array();
-    std::cout << robot_tilt[0] << "," << robot_tilt[1] << "," << robot_tilt[2] << std::endl;
 
     auto roll = robot_tilt[0] * M_PI / 180;
     auto pitch = robot_tilt[1] * M_PI / 180;
     auto yaw = robot_tilt[2] * M_PI / 180;
 
     // カメラの回転と同じにすることに注意
-    pcl::PointCloud<pcl::PointXYZRGB>::Ptr transformed_cloud(new pcl::PointCloud<pcl::PointXYZRGB>);
+    PC_Type::Ptr transformed_cloud(new PC_Type);
     pcl::transformPointCloud(original_cloud, *transformed_cloud, rotation_y_matrix(yaw) * rotation_z_matrix(-pitch) * rotation_x_matrix(roll));
 
     // 分割してROSのMSGに変換
-    std::vector<sensor_msgs::msg::PointCloud2> new_msgs(publishers.size());
+    std::vector<sensor_msgs::msg::PointCloud2::UniquePtr> new_msgs;
 
-    RCLCPP_INFO(this->get_logger(), "generate first layer by spliting(%f ~ %f)", ThresholdLowest, split_thresholds[0]);
-    auto splited = split_pointcloud(*transformed_cloud, ThresholdLowest, split_thresholds[0]);
-    RCLCPP_INFO(this->get_logger(), "first layer to ros msg");
-    pcl::toROSMsg(*splited, new_msgs[0]);
-
-    RCLCPP_INFO(this->get_logger(), "generate some layer by spliting");
+    RCLCPP_INFO(this->get_logger(), "generate layers by spliting");
     for (size_t i = 0; i < split_thresholds.size() - 1; i++)
     {
       const auto &min_th = split_thresholds[i];
       const auto &max_th = split_thresholds[i + 1];
 
       auto splited = split_pointcloud(*transformed_cloud, min_th, max_th);
-      pcl::toROSMsg(*splited, new_msgs[i + 1]);
+      sensor_msgs::msg::PointCloud2::UniquePtr new_msg(new sensor_msgs::msg::PointCloud2());
+      pcl::toROSMsg(*splited, *new_msg);
+      new_msgs.push_back(std::move(new_msg));
     }
 
-    RCLCPP_INFO(this->get_logger(), "generate last layer by spliting");
-    splited = split_pointcloud(*transformed_cloud, split_thresholds.back(), ThresholdMax);
-    pcl::toROSMsg(*splited, new_msgs.back());
-
-    RCLCPP_INFO(this->get_logger(), "publish");
     // headerを追加してpublish
+    RCLCPP_INFO(this->get_logger(), "publish");
+    msg->header.set__frame_id("nemui");
     for (size_t i = 0; i < publishers.size(); i++)
     {
-      new_msgs[i].header = msg->header;
-      publishers[i]->publish(new_msgs[i]);
+      new_msgs[i]->header = msg->header;
+      publishers[i]->publish(std::move(new_msgs[i]));
     }
+
+    sensor_msgs::msg::PointCloud2::UniquePtr converted_pointcloud(new sensor_msgs::msg::PointCloud2());
+    pcl::toROSMsg(*transformed_cloud, *converted_pointcloud);
+    converted_pointcloud->header = msg->header;
+    converted_pointcloud_publisher->publish(std::move(converted_pointcloud));
   }
 
   static Eigen::Matrix4f rotation_x_matrix(const double &theta)
@@ -147,10 +136,10 @@ private:
     return rotation_matrix;
   }
 
-  static pcl::PointCloud<pcl::PointXYZRGB>::Ptr split_pointcloud(const pcl::PointCloud<pcl::PointXYZRGB> &origin, const float &min_value, const float &max_value)
+  static PC_Type::Ptr split_pointcloud(const PC_Type &origin, const float &min_value, const float &max_value)
   {
-    pcl::PointCloud<pcl::PointXYZRGB> splited;
-    pcl::PassThrough<pcl::PointXYZRGB> cloud_filter;
+    PC_Type splited;
+    pcl::PassThrough<PC_Type::PointType> cloud_filter;
     cloud_filter.setInputCloud(origin.makeShared());
     cloud_filter.setFilterFieldName("y");
     cloud_filter.setFilterLimits(min_value, max_value);
@@ -163,7 +152,7 @@ private:
 int main(int argc, char **argv)
 {
   rclcpp::init(argc, argv);
-  rclcpp::spin(std::make_shared<To2DLiDARNode>());
+  rclcpp::spin(std::make_shared<PreprocessNode>());
   rclcpp::shutdown();
 
   return 0;
