@@ -22,6 +22,7 @@ find_package(ament_cmake REQUIRED)
 # find_package(<dependency> REQUIRED)
 
 find_package(rclcpp REQUIRED)
+find_package(std_msgs REQUIRED)
 find_package(sensor_msgs REQUIRED)
 find_package(pcl_conversions REQUIRED)
 find_package(PCL 1.13 REQUIRED)
@@ -34,21 +35,36 @@ link_directories(${PCL_LIBRARY_DIRS})
 add_definitions(${PCL_DEFINITIONS})
 
 add_executable(preprocess src/preprocess.cpp)
+add_executable(postprocess src/postprocess.cpp)
 
 ament_target_dependencies(preprocess
   rclcpp
+  std_msgs
+  sensor_msgs
+  pcl_conversions
+  PCL
+)
+ament_target_dependencies(postprocess
+  rclcpp
+  std_msgs
   sensor_msgs
   pcl_conversions
   PCL
 )
 
 target_link_libraries(preprocess ${PCL_LIBRARIES})
+target_link_libraries(postprocess ${PCL_LIBRARIES})
 
 target_include_directories(preprocess PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
   $<INSTALL_INTERFACE:include>)
+target_include_directories(postprocess PUBLIC
+  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+  $<INSTALL_INTERFACE:include>)
 
 install(TARGETS preprocess
+  DESTINATION lib/${PROJECT_NAME})
+  install(TARGETS postprocess
   DESTINATION lib/${PROJECT_NAME})
 
 if(BUILD_TESTING)
