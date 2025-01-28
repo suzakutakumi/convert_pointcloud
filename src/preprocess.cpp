@@ -4,7 +4,11 @@
 #include <pcl_conversions/pcl_conversions.h>
 #include <pcl/io/pcd_io.h>
 #include <pcl/filters/passthrough.h>
+#include <pcl/filters/extract_indices.h>
 #include <pcl/common/transforms.h>
+#include <pcl/common/common.h>
+#include <pcl/segmentation/sac_segmentation.h>
+#include <pcl/sample_consensus/sac_model_parallel_plane.h>
 
 #include <Eigen/Dense>
 
@@ -49,7 +53,7 @@ private:
   const float ThresholdLowest = std::numeric_limits<float>::lowest();
   const float ThresholdMax = std::numeric_limits<float>::max();
 
-  void subscriber_callback(const sensor_msgs::msg::PointCloud2::SharedPtr msg) const
+  void subscriber_callback(const sensor_msgs::msg::PointCloud2::SharedPtr msg)
   {
     RCLCPP_INFO(this->get_logger(), "subscribe pointcloud(size: %d)", msg->data.size());
 
@@ -76,11 +80,13 @@ private:
     RCLCPP_INFO(this->get_logger(), "generate layers by spliting");
     for (size_t i = 0; i < split_thresholds.size() - 1; i++)
     {
+      RCLCPP_INFO_STREAM(this->get_logger(), "generate layers by spliting " << i);
       const auto &min_th = split_thresholds[i];
       const auto &max_th = split_thresholds[i + 1];
 
       auto splited = split_pointcloud(*transformed_cloud, min_th, max_th);
       sensor_msgs::msg::PointCloud2::UniquePtr new_msg(new sensor_msgs::msg::PointCloud2());
+      remove_floor(splited);
       pcl::toROSMsg(*splited, *new_msg);
       new_msgs.push_back(std::move(new_msg));
     }
@@ -90,12 +96,16 @@ private:
     msg->header.set__frame_id("nemui");
     for (size_t i = 0; i < publishers.size(); i++)
     {
+      RCLCPP_INFO_STREAM(this->get_logger(), "publish layer " << i << " size: " << new_msgs[i]->data.size() / 32);
       new_msgs[i]->header = msg->header;
       publishers[i]->publish(std::move(new_msgs[i]));
     }
 
+    remove_floor(transformed_cloud);
+
     sensor_msgs::msg::PointCloud2::UniquePtr converted_pointcloud(new sensor_msgs::msg::PointCloud2());
     pcl::toROSMsg(*transformed_cloud, *converted_pointcloud);
+    RCLCPP_INFO_STREAM(this->get_logger(), "publish converted pc that is size: " << transformed_cloud->size());
     converted_pointcloud->header = msg->header;
     converted_pointcloud_publisher->publish(std::move(converted_pointcloud));
   }
@@ -146,6 +156,43 @@ private:
     cloud_filter.filter(splited);
 
     return splited.makeShared();
+  }
+
+  void remove_floor(PC_Type::Ptr origin)
+  {
+    pcl::SACSegmentation<PC_Type::PointType> seg;
+
+    seg.setOptimizeCoefficients(true);     // モデル係数を最適化
+    seg.setModelType(pcl::SACMODEL_PLANE); // 平行平面モデル
+    seg.setMethodType(pcl::SAC_MLESAC);    // MLESAC または MSAC
+    seg.setMaxIterations(1000);            // 最大イテレーション数
+    seg.setDistanceThreshold(0.06);        // 平面距離の閾値
+
+    // Set axis to Y direction
+    seg.setAxis(Eigen::Vector3f(0.0, 1.0, 0.0));
+    seg.setEpsAngle(5.0 * M_PI / 180.0); // Allow deviation within 5 degrees
+
+    pcl::PointIndices::Ptr inliers(new pcl::PointIndices());
+    pcl::ModelCoefficients::Ptr coefficients(new pcl::ModelCoefficients());
+
+    seg.setInputCloud(origin);
+    seg.segment(*inliers, *coefficients);
+
+    if (inliers->indices.empty())
+    {
+      return;
+    }
+
+    pcl::ExtractIndices<PC_Type::PointType> extract;
+    extract.setInputCloud(origin);
+    extract.setIndices(inliers);
+    extract.setNegative(true);
+    extract.filter(*origin);
+
+    if (origin->empty())
+    {
+      return;
+    }
   }
 };
 

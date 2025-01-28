@@ -54,6 +54,7 @@ private:
         auto trans_matrix = pcl::getTransformation(x, 0, z, 0, angle, 0);
         pcl::transformPointCloud(original_pointcloud, *transformed, trans_matrix);
 
+        RCLCPP_INFO(this->get_logger(), "publish transformed pointcloud");
         sensor_msgs::msg::PointCloud2::UniquePtr converted_pointcloud(new sensor_msgs::msg::PointCloud2());
         pcl::toROSMsg(*transformed, *converted_pointcloud);
         converted_pointcloud->header.set__frame_id("nemui");
