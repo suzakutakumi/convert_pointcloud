@@ -25,6 +25,7 @@ public:
   {
     this->declare_parameter("split_thresholds", std::vector<double>{0});
     this->declare_parameter("robot_tilt", std::vector<double>{0, 0, 0});
+    this->declare_parameter("use_sac", true);
 
     split_thresholds = get_parameter("split_thresholds").as_double_array();
     split_thresholds.insert(split_thresholds.begin(), ThresholdLowest);
@@ -85,8 +86,16 @@ private:
       const auto &max_th = split_thresholds[i + 1];
 
       auto splited = split_pointcloud(*transformed_cloud, min_th, max_th);
+      RCLCPP_INFO_STREAM(this->get_logger(), "sensor data size: " << splited->size());
       sensor_msgs::msg::PointCloud2::UniquePtr new_msg(new sensor_msgs::msg::PointCloud2());
-      remove_floor(splited);
+      if (splited->size() <= 0)
+      {
+        splited = PC_Type().makeShared();
+      }
+      else if (get_parameter("use_sac").as_bool())
+      {
+        remove_floor(splited);
+      }
       pcl::toROSMsg(*splited, *new_msg);
       new_msgs.push_back(std::move(new_msg));
     }
