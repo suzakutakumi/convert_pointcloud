@@ -110,7 +110,10 @@ private:
       publishers[i]->publish(std::move(new_msgs[i]));
     }
 
-    remove_floor(transformed_cloud);
+    if (get_parameter("use_sac").as_bool())
+    {
+      remove_floor(transformed_cloud);
+    }
 
     sensor_msgs::msg::PointCloud2::UniquePtr converted_pointcloud(new sensor_msgs::msg::PointCloud2());
     pcl::toROSMsg(*transformed_cloud, *converted_pointcloud);
